@@ -1,0 +1,35 @@
+{
+  "name": "slack-checkin-bot",
+  "version": "1.0.0",
+  "description": "Slack bot for employee check-in/check-out with latest packages",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "dev:env": "ts-node -r dotenv/config src/index.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.4.0",
+    "@slack/web-api": "^7.9.3",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.0",
+    "typescript": "^5.9.2",
+    "ts-node": "^10.9.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "slack",
+    "bot",
+    "checkin",
+    "typescript",
+    "bolt"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
