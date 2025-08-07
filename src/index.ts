@@ -43,6 +43,8 @@ interface CheckinRecord {
   updatedAt: Date;
   currentBreak?: BreakRecord;
   totalBreakTime?: number; // in minutes
+  currentWorkStatus?: string;
+  statusHistory?: StatusUpdate[];
 }
 
 interface BreakRecord {
@@ -51,6 +53,13 @@ interface BreakRecord {
   endTime?: Date;
   duration?: number; // in minutes
   notes?: string;
+}
+
+interface StatusUpdate {
+  status: string;
+  timestamp: Date;
+  userId: string;
+  username: string;
 }
 
 // Firebase collections
@@ -100,6 +109,21 @@ async function saveCheckinRecord(record: CheckinRecord): Promise<void> {
       firestoreData.totalBreakTime = record.totalBreakTime;
     }
 
+    // Handle current work status
+    if (record.currentWorkStatus && record.currentWorkStatus.trim() !== '') {
+      firestoreData.currentWorkStatus = record.currentWorkStatus;
+    }
+
+    // Handle status history
+    if (record.statusHistory && record.statusHistory.length > 0) {
+      firestoreData.statusHistory = record.statusHistory.map(update => ({
+        status: update.status,
+        timestamp: admin.firestore.Timestamp.fromDate(update.timestamp),
+        userId: update.userId,
+        username: update.username
+      }));
+    }
+
     await docRef.set(firestoreData);
   } catch (error) {
     console.error('Error saving checkin record:', error);
@@ -126,8 +150,20 @@ async function getCheckinRecord(userId: string): Promise<CheckinRecord | null> {
       notes: data.notes || undefined,
       createdAt: data.createdAt.toDate(),
       updatedAt: data.updatedAt.toDate(),
-      totalBreakTime: data.totalBreakTime || 0
+      totalBreakTime: data.totalBreakTime || 0,
+      currentWorkStatus: data.currentWorkStatus || undefined,
+      statusHistory: []
     };
+
+    // Handle status history
+    if (data.statusHistory && data.statusHistory.length > 0) {
+      record.statusHistory = data.statusHistory.map((update: any) => ({
+        status: update.status,
+        timestamp: update.timestamp.toDate(),
+        userId: update.userId,
+        username: update.username
+      }));
+    }
 
     // Handle current break data
     if (data.currentBreak) {
@@ -163,8 +199,20 @@ async function getAllCheckinRecords(): Promise<CheckinRecord[]> {
         notes: data.notes || undefined,
         createdAt: data.createdAt.toDate(),
         updatedAt: data.updatedAt.toDate(),
-        totalBreakTime: data.totalBreakTime || 0
+        totalBreakTime: data.totalBreakTime || 0,
+        currentWorkStatus: data.currentWorkStatus || undefined,
+        statusHistory: []
       };
+
+      // Handle status history
+      if (data.statusHistory && data.statusHistory.length > 0) {
+        record.statusHistory = data.statusHistory.map((update: any) => ({
+          status: update.status,
+          timestamp: update.timestamp.toDate(),
+          userId: update.userId,
+          username: update.username
+        }));
+      }
 
       // Handle current break data
       if (data.currentBreak) {
@@ -264,9 +312,11 @@ app.command('/checkin', async ({ command, ack, respond }) => {
       createdAt: now,
       updatedAt: now,
       totalBreakTime: 0,
+      statusHistory: [], // Initialize empty status history
       ...(notes && { notes })
     };
 
+    // Save to Firebase
     await saveCheckinRecord(checkinRecord);
 
     // Send confirmation message
@@ -295,7 +345,7 @@ app.command('/checkin', async ({ command, ack, respond }) => {
       elements: [
         {
           type: 'mrkdwn',
-          text: 'Use `/checkout` when you\'re ready to leave or `/break-start <type>` for breaks'
+          text: 'Use `/checkout` when you\'re ready to leave, `/break-start <type>` for breaks, or `/status-update` to share what you\'re working on'
         }
       ]
     });
@@ -375,6 +425,14 @@ app.command('/checkout', async ({ command, ack, respond }) => {
       const firstBlock = blocks[0] as any;
       if (firstBlock && firstBlock.text && firstBlock.text.text) {
         firstBlock.text.text += `\n*Total break time:* ${existingRecord.totalBreakTime} minutes`;
+      }
+    }
+
+    // Show status updates count if any
+    if (existingRecord.statusHistory && existingRecord.statusHistory.length > 0) {
+      const firstBlock = blocks[0] as any;
+      if (firstBlock && firstBlock.text && firstBlock.text.text) {
+        firstBlock.text.text += `\n*Status updates:* ${existingRecord.statusHistory.length} during this session`;
       }
     }
 
@@ -610,8 +668,88 @@ app.command('/break-end', async ({ command, ack, respond }) => {
   }
 });
 
-// Status command to check current status
+// Status update command - like Discord status with history tracking
 app.command('/status-update', async ({ command, ack, respond }) => {
+  await ack();
+
+  const userId = command.user_id;
+  const username = command.user_name;
+  const workStatus = command.text?.trim() || '';
+
+  try {
+    // Check if user is checked in
+    const existingRecord = await getCheckinRecord(userId);
+    if (!existingRecord || existingRecord.status === 'checked-out') {
+      await respond({
+        response_type: 'ephemeral',
+        text: '⚠️ You need to be checked in to update your work status. Use `/checkin` first.'
+      });
+      return;
+    }
+
+    if (!workStatus) {
+      // Show current status and recent history if no new status provided
+      const currentStatus = existingRecord.currentWorkStatus || 'No work status set';
+      let historyText = '';
+      
+      if (existingRecord.statusHistory && existingRecord.statusHistory.length > 0) {
+        const recentHistory = existingRecord.statusHistory
+          .slice(-5) // Show last 5 status updates
+          .map(update => `• ${formatTime(update.timestamp)}: ${update.status}`)
+          .join('\n');
+        historyText = `\n\n*Recent status history:*\n${recentHistory}`;
+      }
+
+      await respond({
+        response_type: 'ephemeral',
+        text: `📋 **Current work status:** ${currentStatus}${historyText}\n\nTo update: \`/status-update <what you're working on>\`\nExample: \`/status-update Working on user authentication feature\``
+      });
+      return;
+    }
+
+    // Create new status update entry
+    const statusUpdate: StatusUpdate = {
+      status: workStatus,
+      timestamp: new Date(),
+      userId,
+      username
+    };
+
+    // Initialize status history if it doesn't exist
+    if (!existingRecord.statusHistory) {
+      existingRecord.statusHistory = [];
+    }
+
+    // Add to status history
+    existingRecord.statusHistory.push(statusUpdate);
+
+    // Update the work status
+    existingRecord.currentWorkStatus = workStatus;
+    existingRecord.updatedAt = new Date();
+
+    // Save updated record
+    await saveCheckinRecord(existingRecord);
+
+    // Send confirmation
+    const statusEmoji = existingRecord.status === 'on-break' ? '☕' : '💻';
+    const statusText = existingRecord.status === 'on-break' ? 'on break' : 'working';
+
+    await respond({
+      response_type: 'in_channel',
+      text: `${statusEmoji} **<@${userId}>** is ${statusText} on: *${workStatus}*`
+    });
+
+  } catch (error) {
+    console.error('Error in status-update command:', error);
+    await respond({
+      response_type: 'ephemeral',
+      text: '❌ Failed to update work status. Please try again.'
+    });
+  }
+});
+
+// Status history command to view all status updates for current session
+app.command('/status-history', async ({ command, ack, respond }) => {
   await ack();
 
   const userId = command.user_id;
@@ -627,55 +765,42 @@ app.command('/status-update', async ({ command, ack, respond }) => {
       return;
     }
 
-    let statusText = '';
-    
-    if (record.status === 'on-break' && record.currentBreak) {
-      const breakConfig = BREAK_TYPES[record.currentBreak.type];
-      const breakDuration = Math.round((new Date().getTime() - record.currentBreak.startTime.getTime()) / 60000);
-      
-      statusText = `${breakConfig.emoji} *Currently on ${breakConfig.name.toLowerCase()}*\n*Break started:* ${formatTime(record.currentBreak.startTime)}\n*Break duration:* ${breakDuration} minutes`;
-      
-      if (breakConfig.duration) {
-        const remaining = breakConfig.duration - breakDuration;
-        if (remaining > 0) {
-          statusText += `\n*Expected remaining:* ${remaining} minutes`;
-        } else {
-          statusText += `\n*⏰ Break exceeded expected time by ${Math.abs(remaining)} minutes*`;
-        }
-      }
-      
-      const workDuration = calculateDuration(record.checkinTime, record.currentBreak.startTime);
-      statusText += `\n*Work time before break:* ${workDuration}`;
-    } else if (record.status === 'checked-in') {
-      const duration = calculateDuration(record.checkinTime, new Date());
-      statusText = `🟢 *Currently checked in*\n*Since:* ${formatTime(record.checkinTime)}\n*Work duration:* ${duration}`;
-    } else {
-      const duration = calculateDuration(record.checkinTime, record.checkoutTime!);
-      statusText = `🔴 *Checked out*\n*Check-in:* ${formatTime(record.checkinTime)}\n*Check-out:* ${formatTime(record.checkoutTime!)}\n*Total Duration:* ${duration}`;
+    if (!record.statusHistory || record.statusHistory.length === 0) {
+      await respond({
+        response_type: 'ephemeral',
+        text: '📋 No status updates recorded for this check-in session.\n\nUse `/status-update <status>` to start tracking your work activities.'
+      });
+      return;
     }
 
-    // Add total break time if any
-    if (record.totalBreakTime && record.totalBreakTime > 0) {
-      statusText += `\n*Total break time today:* ${record.totalBreakTime} minutes`;
+    // Create history text
+    let historyText = `📋 *Status History for Current Session*\n`;
+    historyText += `*Checked in:* ${formatTime(record.checkinTime)}\n`;
+    if (record.checkoutTime) {
+      historyText += `*Checked out:* ${formatTime(record.checkoutTime)}\n`;
     }
+    historyText += `\n*Status Updates (${record.statusHistory.length}):*\n`;
 
-    if (record.notes) {
-      statusText += `\n*Notes:* ${record.notes}`;
-    }
+    // Show all status updates in chronological order
+    record.statusHistory.forEach((update, index) => {
+      const timeStr = formatTime(update.timestamp);
+      historyText += `${index + 1}. **${timeStr}**\n   ${update.status}\n`;
+    });
 
-    if (record.currentBreak?.notes) {
-      statusText += `\n*Break notes:* ${record.currentBreak.notes}`;
+    // Add current status if still checked in
+    if (record.status !== 'checked-out' && record.currentWorkStatus) {
+      historyText += `\n*Current Status:* ${record.currentWorkStatus}`;
     }
 
     await respond({
       response_type: 'ephemeral',
-      text: statusText
+      text: historyText
     });
   } catch (error) {
-    console.error('Error in status command:', error);
+    console.error('Error in status-history command:', error);
     await respond({
       response_type: 'ephemeral',
-      text: '❌ Failed to retrieve status. Please try again.'
+      text: '❌ Failed to retrieve status history. Please try again.'
     });
   }
 });
@@ -706,7 +831,10 @@ app.command('/checkin-report', async ({ command, ack, respond }) => {
       checkedInUsers.forEach(record => {
         const duration = calculateDuration(record.checkinTime, new Date());
         const breakInfo = record.totalBreakTime ? ` | ${record.totalBreakTime}min break` : '';
-        reportText += `• <@${record.userId}> - ${formatTime(record.checkinTime)} (${duration}${breakInfo})\n`;
+        const statusUpdates = record.statusHistory?.length || 0;
+        const statusInfo = statusUpdates > 0 ? ` | ${statusUpdates} updates` : '';
+        const workStatus = record.currentWorkStatus ? `\n  📋 ${record.currentWorkStatus}` : '';
+        reportText += `• <@${record.userId}> - ${formatTime(record.checkinTime)} (${duration}${breakInfo}${statusInfo})${workStatus}\n`;
       });
       reportText += '\n';
     }
@@ -717,7 +845,10 @@ app.command('/checkin-report', async ({ command, ack, respond }) => {
         if (record.currentBreak) {
           const breakConfig = BREAK_TYPES[record.currentBreak.type];
           const breakDuration = Math.round((new Date().getTime() - record.currentBreak.startTime.getTime()) / 60000);
-          reportText += `• <@${record.userId}> - ${breakConfig.emoji} ${breakConfig.name} (${breakDuration}min)\n`;
+          const statusUpdates = record.statusHistory?.length || 0;
+          const statusInfo = statusUpdates > 0 ? ` | ${statusUpdates} updates` : '';
+          const workStatus = record.currentWorkStatus ? `\n  📋 Was working on: ${record.currentWorkStatus}` : '';
+          reportText += `• <@${record.userId}> - ${breakConfig.emoji} ${breakConfig.name} (${breakDuration}min${statusInfo})${workStatus}\n`;
         }
       });
       reportText += '\n';
@@ -728,7 +859,9 @@ app.command('/checkin-report', async ({ command, ack, respond }) => {
       checkedOutUsers.forEach(record => {
         const duration = calculateDuration(record.checkinTime, record.checkoutTime!);
         const breakInfo = record.totalBreakTime ? ` | ${record.totalBreakTime}min break` : '';
-        reportText += `• <@${record.userId}> - ${duration} total${breakInfo}\n`;
+        const statusUpdates = record.statusHistory?.length || 0;
+        const statusInfo = statusUpdates > 0 ? ` | ${statusUpdates} updates` : '';
+        reportText += `• <@${record.userId}> - ${duration} total${breakInfo}${statusInfo}\n`;
       });
     }
 
@@ -754,13 +887,13 @@ app.error(async (error) => {
 (async () => {
   try {
     await app.start();
-    console.log('⚡️ Slack Check-in Bot with Break Tracking is running!');
     console.log('Available commands:');
     console.log('  /checkin [optional notes] - Check in to work');
     console.log('  /checkout [optional notes] - Check out from work');
     console.log('  /break-start <type> [notes] - Start a break (short, lunch, personal, meeting)');
     console.log('  /break-end [notes] - End current break');
-    console.log('  /status - View your current check-in status');
+    console.log('  /status-update [text] - Update what you\'re working on');
+    console.log('  /status-history - View all status updates for current session');
     console.log('  /checkin-report - View all check-ins (admin)');
     console.log('\nBreak types available:');
     Object.entries(BREAK_TYPES).forEach(([key, config]) => {
