@@ -1,13 +1,11 @@
-import { UserPreferences, FirestoreUserPreferences, UserCurrentState, UserStatus, FirestoreUserStatus, CheckinSession, FirestoreCheckinSession, BreakRecord, BreakType, FirestoreBreakRecord, FirestoreStatusUpdate, StatusUpdate } from "./schema";
+import { App } from "@slack/bolt";
+import { UserPreferences, FirestoreUserPreferences, UserCurrentState, UserStatus, FirestoreUserStatus, CheckinSession, FirestoreCheckinSession, BreakRecord, BreakType, FirestoreBreakRecord, FirestoreStatusUpdate, StatusUpdate, StatusReminder, FirestoreStatusReminder } from "./schema";
 
 import * as admin from 'firebase-admin';
-
-const db = admin.firestore();
-
-// Configure Firestore to ignore undefined properties
-db.settings({
-    ignoreUndefinedProperties: true
-});
+import { COLLECTIONS, BREAK_TYPES } from "./constants";
+import { getSystemTimezone, getDateString, generateSessionId, generateBreakId, generateStatusUpdateId, formatTime } from "./helper";
+import { app } from ".";
+import { db } from "./firebase";
 
 export async function getUserPreferences(userId: string): Promise<UserPreferences | null> {
     try {
@@ -645,4 +643,302 @@ export async function getSessionStatusUpdates(
 export async function getLatestStatusUpdate(sessionId: string): Promise<StatusUpdate | null> {
     const updates = await getSessionStatusUpdates(sessionId, 1);
     return updates.length > 0 ? updates[0] || null : null;
+}
+
+export async function createStatusReminder(userId: string, username: string, sessionId: string): Promise<void> {
+  try {
+    const timezone = await getUserTimezone(userId);
+    const now = new Date();
+    
+    const reminder: StatusReminder = {
+      userId,
+      username,
+      sessionId,
+      reminderCount: 0,
+      isActive: true,
+      timezone
+    };
+    
+    const reminderData: Record<string, any> = {
+      ...reminder,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    
+    await db.collection(COLLECTIONS.STATUS_REMINDERS).doc(userId).set(reminderData);
+    console.log(`Status reminder created for user ${userId} (session: ${sessionId})`);
+  } catch (error) {
+    console.error('Error creating status reminder:', error);
+  }
+}
+
+export async function updateStatusReminder(userId: string, updates: Partial<StatusReminder>): Promise<void> {
+  try {
+    const updateData: Record<string, any> = {
+      ...updates,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    
+    if (updates.lastReminderSent) {
+      updateData.lastReminderSent = admin.firestore.Timestamp.fromDate(updates.lastReminderSent);
+    }
+    if (updates.lastStatusUpdate) {
+      updateData.lastStatusUpdate = admin.firestore.Timestamp.fromDate(updates.lastStatusUpdate);
+    }
+    
+    await db.collection(COLLECTIONS.STATUS_REMINDERS).doc(userId).update(updateData);
+  } catch (error) {
+    console.error('Error updating status reminder:', error);
+  }
+}
+
+export async function getStatusReminder(userId: string): Promise<StatusReminder | null> {
+  try {
+    const doc = await db.collection(COLLECTIONS.STATUS_REMINDERS).doc(userId).get();
+    
+    if (!doc.exists) {
+      return null;
+    }
+    
+    const data = doc.data() as FirestoreStatusReminder;
+    return {
+      ...data,
+      lastReminderSent: data.lastReminderSent?.toDate(),
+      lastStatusUpdate: data.lastStatusUpdate?.toDate()
+    };
+  } catch (error) {
+    console.error('Error getting status reminder:', error);
+    return null;
+  }
+}
+
+export async function deactivateStatusReminder(userId: string): Promise<void> {
+  try {
+    await updateStatusReminder(userId, { isActive: false });
+    console.log(`Status reminder deactivated for user ${userId}`);
+  } catch (error) {
+    console.error('Error deactivating status reminder:', error);
+  }
+}
+
+export async function getActiveStatusReminders(): Promise<StatusReminder[]> {
+  try {
+    const snapshot = await db
+      .collection(COLLECTIONS.STATUS_REMINDERS)
+      .where('isActive', '==', true)
+      .get();
+    
+    return snapshot.docs.map(doc => {
+      const data = doc.data() as FirestoreStatusReminder;
+      return {
+        ...data,
+        lastReminderSent: data.lastReminderSent?.toDate(),
+        lastStatusUpdate: data.lastStatusUpdate?.toDate()
+      } as StatusReminder;
+    });
+  } catch (error) {
+    console.error('Error getting active status reminders:', error);
+    return [];
+  }
+}
+
+// Status Reminder Logic - Updated to receive app instance
+export async function sendStatusReminder(
+  userId: string, 
+  timezone: string
+): Promise<void> {
+  try {
+    const userState = await getUserCurrentState(userId);
+    
+    // Don't send reminder if user is not checked in or is on break
+    if (!userState || userState.status.status !== 'checked-in') {
+      return;
+    }
+    
+    const currentTime = formatTime(new Date(), timezone);
+    const lastStatus = userState.status.currentSession?.currentWorkStatus || 'No status set';
+    
+    const blocks = [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `⏰ *Status Check-in Time!*\n\nHi <@${userId}>! It's been 45 minutes since your last update.\n\n*Current time:* ${currentTime}\n*Last status:* ${lastStatus}`
+        }
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*What are you working on now?*\n\nPlease update your status using: `/status-update <what you\'re working on>`'
+        }
+      },
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: '💡 Regular status updates help keep the team informed and improve productivity tracking!'
+          }
+        ]
+      }
+    ];
+    
+    // Send DM to user
+    const result = await app.client.chat.postMessage({
+      token: process.env.SLACK_BOT_TOKEN,
+      channel: userId,
+      blocks: blocks,
+      text: `Status reminder: Please update what you're working on using /status-update`
+    });
+    
+    if (result.ok) {
+      console.log(`Status reminder sent to user ${userId}`);
+      
+      // Update reminder record
+      const reminder = await getStatusReminder(userId);
+      if (reminder) {
+        await updateStatusReminder(userId, {
+          lastReminderSent: new Date(),
+          reminderCount: reminder.reminderCount + 1
+        });
+      }
+    } else {
+      console.error('Failed to send status reminder:', result.error);
+    }
+  } catch (error) {
+    console.error('Error sending status reminder:', error);
+  }
+}
+
+export async function checkAndSendStatusReminders(app: App): Promise<void> {
+  try {
+    const activeReminders = await getActiveStatusReminders();
+    const now = new Date();
+    const REMINDER_INTERVAL_MS = 45 * 60 * 1000; // 45 minutes
+    
+    console.log(`Checking ${activeReminders.length} active reminder(s) for status updates`);
+    
+    for (const reminder of activeReminders) {
+      // Skip if user is not in an active session
+      const userState = await getUserCurrentState(reminder.userId);
+      if (!userState || userState.status.status !== 'checked-in') {
+        continue;
+      }
+      
+      // Determine when last status activity occurred
+      let lastActivityTime: Date;
+      
+      if (reminder.lastStatusUpdate) {
+        lastActivityTime = reminder.lastStatusUpdate;
+      } else if (userState.recentStatusUpdates && userState.recentStatusUpdates.length > 0) {
+        lastActivityTime = userState.recentStatusUpdates[0]!.timestamp;
+      } else if (userState.currentSession) {
+        // No status updates yet, use check-in time
+        lastActivityTime = userState.currentSession.checkinTime;
+      } else {
+        continue;
+      }
+      
+      // Check if 45 minutes have passed since last activity
+      const timeSinceLastActivity = now.getTime() - lastActivityTime.getTime();
+      
+      if (timeSinceLastActivity >= REMINDER_INTERVAL_MS) {
+        // Check if we already sent a reminder recently (avoid spam)
+        if (reminder.lastReminderSent) {
+          const timeSinceLastReminder = now.getTime() - reminder.lastReminderSent.getTime();
+          // Only send another reminder if it's been at least 45 minutes since the last one
+          if (timeSinceLastReminder < REMINDER_INTERVAL_MS) {
+            continue;
+          }
+        }
+        
+        await sendStatusReminder(reminder.userId, reminder.timezone);
+      }
+    }
+  } catch (error) {
+    console.error('Error in checkAndSendStatusReminders:', error);
+  }
+}
+
+// Modified createCheckinSession function to include reminder setup
+export async function createCheckinSessionWithReminder(
+  userId: string, 
+  username: string, 
+  notes?: string
+): Promise<CheckinSession> {
+  try {
+    // Create the session (existing logic)
+    const session = await createCheckinSession(userId, username, notes);
+    
+    // Create status reminder for this session
+    await createStatusReminder(userId, username, session.sessionId);
+    
+    return session;
+  } catch (error) {
+    console.error('Error creating checkin session with reminder:', error);
+    throw error;
+  }
+}
+
+// Modified completeCheckinSession to deactivate reminder
+export async function completeCheckinSessionWithReminder(
+  sessionId: string, 
+  checkoutNotes?: string
+): Promise<void> {
+  try {
+    const session = await getCheckinSession(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+    
+    // Complete the session (existing logic)
+    await completeCheckinSession(sessionId, checkoutNotes);
+    
+    // Deactivate status reminder
+    await deactivateStatusReminder(session.userId);
+  } catch (error) {
+    console.error('Error completing checkin session with reminder cleanup:', error);
+    throw error;
+  }
+}
+
+// Modified addStatusUpdate to update reminder timestamp
+export async function addStatusUpdateWithReminderUpdate(
+  sessionId: string,
+  userId: string,
+  username: string,
+  status: string
+): Promise<StatusUpdate> {
+  try {
+    // Add the status update (existing logic)
+    const statusUpdate = await addStatusUpdate(sessionId, userId, username, status);
+    
+    // Update the reminder with last status update time
+    const reminder = await getStatusReminder(userId);
+    if (reminder && reminder.isActive) {
+      await updateStatusReminder(userId, {
+        lastStatusUpdate: new Date()
+      });
+    }
+    
+    return statusUpdate;
+  } catch (error) {
+    console.error('Error adding status update with reminder update:', error);
+    throw error;
+  }
+}
+
+// Start the reminder checking interval - Updated to receive app instance
+export function startStatusReminderService(app: App): void {
+  console.log('🔔 Starting status reminder service...');
+  
+  // Check every 5 minutes for users who need reminders
+  const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  
+  setInterval(async () => {
+    await checkAndSendStatusReminders(app);
+  }, CHECK_INTERVAL_MS);
+  
+  console.log(`✅ Status reminder service started (checking every ${CHECK_INTERVAL_MS / 1000 / 60} minutes)`);
 }

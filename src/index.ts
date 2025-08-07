@@ -1,23 +1,21 @@
 import { App } from '@slack/bolt';
 import dotenv from 'dotenv';
-import * as admin from 'firebase-admin';
 import { handleBreakEnd, handleBreakStart, handleCheckin, handleCheckinReport, handleCheckout, handleMyHistory, handleSetTimezone, handleStatusHistory, handleStatusUpdate } from './commands';
+import { startStatusReminderService } from './database';
+import { BREAK_TYPES } from './constants';
+import './firebase'; 
 
 dotenv.config();
 
-let firebaseApp: admin.app.App;
-
-if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
-  firebaseApp = admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL: process.env.FIREBASE_DATABASE_URL
-  });
-} else {
-  throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY environment variable is required');
+function validateEnvVar(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Environment variable ${name} is required but not set`);
+  }
+  return value;
 }
 
-const app = new App({
+export const app = new App({
   token: validateEnvVar('SLACK_BOT_TOKEN'),
   signingSecret: validateEnvVar('SLACK_SIGNING_SECRET'),
   socketMode: true,
@@ -61,24 +59,27 @@ app.error(async (error) => {
   try {
     await app.start();
     console.log('⚡️ Slack bot is running!');
+    
     console.log('\nAvailable commands:');
-    console.log('  /checkin [notes] - Check in to work');
-    console.log('  /checkout [notes] - Check out from work');
+    console.log('  /checkin [notes] - Check in to work (starts status reminders)');
+    console.log('  /checkout [notes] - Check out from work (stops status reminders)');
     console.log('  /break-start <type> [notes] - Start a break');
     console.log('  /break-end [notes] - End current break');
-    console.log('  /status-update [text] - Update work status');
+    console.log('  /status-update [text] - Update work status (resets reminder timer)');
     console.log('  /status-history - View status history');
     console.log('  /checkin-report [date] - View team report');
     console.log('  /my-history [days] - View personal history');
     console.log('  /set-timezone <timezone> - Set your timezone');
+    console.log('\n🔔 Status reminders will be sent every 45 minutes to checked-in users');
     console.log('\nBreak types available:');
     Object.entries(BREAK_TYPES).forEach(([key, config]) => {
       console.log(`  ${key} - ${config.emoji} ${config.name}${config.duration ? ` (${config.duration} min)` : ''}`);
     });
+
+    // Start the status reminder service
+    startStatusReminderService(app);
   } catch (error) {
     console.error('Failed to start the app:', error);
     process.exit(1);
   }
 })();
-
-export { app };

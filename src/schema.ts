@@ -132,3 +132,19 @@ export interface FirestoreUserPreferences extends Omit<UserPreferences, 'created
     createdAt: admin.firestore.Timestamp;
     updatedAt: admin.firestore.Timestamp;
 }
+
+export interface StatusReminder {
+  userId: string;
+  username: string;
+  sessionId: string;
+  lastReminderSent?: Date;
+  lastStatusUpdate?: Date;
+  reminderCount: number;
+  isActive: boolean;
+  timezone: string;
+}
+
+export interface FirestoreStatusReminder extends Omit<StatusReminder, 'lastReminderSent' | 'lastStatusUpdate'> {
+  lastReminderSent?: admin.firestore.Timestamp;
+  lastStatusUpdate?: admin.firestore.Timestamp;
+}
