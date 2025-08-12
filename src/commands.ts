@@ -4,6 +4,7 @@ import { BreakType, CheckinSession } from "./schema";
 import { AllMiddlewareArgs, SlackCommandMiddlewareArgs, StringIndexed } from "@slack/bolt";
 import { BREAK_TYPES } from "./constants";
 import { formatTime, calculateDuration, getDateString } from "./helper";
+import { handleEmployeeQuery } from "./firebase_ai";
 
 type CommandHandler = (
     args: SlackCommandMiddlewareArgs & AllMiddlewareArgs<StringIndexed>
@@ -710,4 +711,54 @@ export const handleSetTimezone: CommandHandler = async ({ command, ack, respond 
             text: '❌ Failed to update timezone. Please try again.'
         });
     }
+}
+
+export const handleAskAI: CommandHandler = async ({ command, ack, respond }) => {
+  await ack();
+
+  const userId = command.user_id;
+  const userQuery = command.text?.trim() || '';
+
+  try {
+    if (!userQuery) {
+      await respond({
+        response_type: 'ephemeral',
+        text: `🤖 *AI Assistant Help*
+
+Ask me anything about employee check-in data using natural language!
+
+*Example queries:*
+• "Who is currently working?"
+• "How many people took breaks today?"
+• "What's the average work time today?"
+• "Who checked in late this morning?"
+• "Show me break patterns this week"
+• "What is John working on?"
+• "Who worked the longest hours yesterday?"
+
+*Usage:* \`/ask <your question>\`
+*Example:* \`/ask Who is on break right now?\``
+      });
+      return;
+    }
+
+    await respond({
+      response_type: 'ephemeral',
+      text: "🤔 Let me analyze the employee data for you..."
+    });
+
+    const aiResponse = await handleEmployeeQuery(userQuery, userId);
+
+    await respond({
+      response_type: 'ephemeral',
+      text: `🤖 **Question:** ${userQuery}\n\n**Answer:** ${aiResponse}`
+    });
+
+  } catch (error) {
+    console.error('Error in AI query command:', error);
+    await respond({
+      response_type: 'ephemeral',
+      text: '❌ Sorry, I encountered an error while processing your question. Please try again or rephrase your query.'
+    });
+  }
 }

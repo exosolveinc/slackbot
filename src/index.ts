@@ -1,6 +1,6 @@
 import { App } from '@slack/bolt';
 import dotenv from 'dotenv';
-import { handleBreakEnd, handleBreakStart, handleCheckin, handleCheckinReport, handleCheckout, handleMyHistory, handleSetTimezone, handleStatusHistory, handleStatusUpdate } from './commands';
+import { handleAskAI, handleBreakEnd, handleBreakStart, handleCheckin, handleCheckinReport, handleCheckout, handleMyHistory, handleSetTimezone, handleStatusHistory, handleStatusUpdate } from './commands';
 import { startStatusReminderService } from './database';
 import { BREAK_TYPES } from './constants';
 import './firebase'; 
@@ -48,6 +48,8 @@ app.command('/my-history', handleMyHistory);
 
 // Set timezone command
 app.command('/set-timezone', handleSetTimezone);
+
+app.command('/ask', handleAskAI);
 
 // Error handler
 app.error(async (error) => {
