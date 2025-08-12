@@ -14,12 +14,13 @@
     "@slack/bolt": "^4.4.0",
     "@slack/web-api": "^7.9.3",
     "dotenv": "^16.4.5",
+    "firebase": "^12.1.0",
     "firebase-admin": "^12.5.0"
   },
   "devDependencies": {
     "@types/node": "^24.2.0",
-    "typescript": "^5.9.2",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
   },
   "engines": {
     "node": ">=18.0.0"
