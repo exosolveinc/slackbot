@@ -46,6 +46,7 @@ Create these commands in **Slash Commands**:
 - `/checkin-report` - View team report
 - `/my-history` - View personal history
 - `/set-timezone` - Set timezone preference
+- `/ask` Ask the bot
 
 #### Socket Mode
 1. Enable **Socket Mode** in your app settings
@@ -73,6 +74,13 @@ SLACK_APP_TOKEN=xapp-your-app-token
 # Firebase Configuration
 FIREBASE_SERVICE_ACCOUNT_KEY={"type":"service_account","project_id":"your-project",...}
 FIREBASE_DATABASE_URL=https://your-project.firebaseio.com
+FIREBASE_API_KEY="api-key"
+AUTH_DOMAIN="auth-domain"
+PROJECT_ID="project-id"
+STORAGE_BUCKET="storage-bucket"
+MESSAGING_SENDER_ID="messaging-sender-id"
+APP_ID="app-id"
+MEASUREMENT_ID="measurement-id"
 ```
 
 ## Usage
@@ -127,8 +135,6 @@ npm start
 # View status update history
 /status-history
 
-# Ask the bot
-/ask
 ```
 
 #### Settings
