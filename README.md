@@ -126,6 +126,9 @@ npm start
 
 # View status update history
 /status-history
+
+# Ask the bot
+/ask
 ```
 
 #### Settings
@@ -178,3 +181,10 @@ Ensure these are set in your production environment:
 - `SLACK_APP_TOKEN`
 - `FIREBASE_SERVICE_ACCOUNT_KEY`
 - `FIREBASE_DATABASE_URL`
+- `FIREBASE_API_KEY`
+- `AUTH_DOMAIN`
+- `PROJECT_ID`
+- `STORAGE_BUCKET`
+- `MESSAGING_SENDER_ID`
+- `APP_ID`
+- `MEASUREMENT_ID`
