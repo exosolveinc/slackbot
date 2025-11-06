@@ -4,7 +4,8 @@ export const COLLECTIONS = {
     USER_PREFERENCES: 'user_preferences',
     BREAKS: 'breaks',
     STATUS_UPDATES: 'status_updates',
-    STATUS_REMINDERS: 'status_reminders'
+    STATUS_REMINDERS: 'status_reminders',
+    INTERVIEW_REQUESTS: 'interview_requests',
 } as const;
 
 export const BREAK_TYPES = {

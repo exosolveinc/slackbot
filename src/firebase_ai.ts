@@ -1,7 +1,7 @@
 import { COLLECTIONS } from "./constants";
 import { getActiveUsers } from "./database";
-import { db, admin, model } from "./firebase";
-import { FirestoreCheckinSession, FirestoreBreakRecord, FirestoreStatusUpdate } from "./schema";
+import { admin, db, model } from "./firebase";
+import { FirestoreBreakRecord, FirestoreCheckinSession, FirestoreStatusUpdate } from "./schema";
 
 async function fetchRelevantEmployeeData(userQuery: string): Promise<any[]> {
   const today = new Date();
@@ -16,6 +16,45 @@ async function fetchRelevantEmployeeData(userQuery: string): Promise<any[]> {
     const isWeek = userQuery.toLowerCase().includes('week') || userQuery.toLowerCase().includes('weekly');
     const isMonth = userQuery.toLowerCase().includes('month') || userQuery.toLowerCase().includes('monthly');
     const isHistory = userQuery.toLowerCase().includes('history') || userQuery.toLowerCase().includes('past');
+    
+    // Add interview data if query mentions interviews
+    if (userQuery.toLowerCase().includes('interview') || 
+        userQuery.toLowerCase().includes('candidate') ||
+        userQuery.toLowerCase().includes('optimal')) {
+      
+      const today = new Date();
+      const startDate = new Date(today.setDate(today.getDate() - 30)); // Last 30 days
+      const endDate = new Date(today.setDate(today.getDate() + 60)); // Next 60 days
+      
+      const interviewsSnapshot = await db
+        .collection(COLLECTIONS.INTERVIEW_REQUESTS)
+        .where('startTime', '>=', admin.firestore.Timestamp.fromDate(startDate))
+        .where('startTime', '<=', admin.firestore.Timestamp.fromDate(endDate))
+        .orderBy('startTime', 'desc')
+        .limit(50)
+        .get();
+
+      const interviews = interviewsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          eventId: data.eventId,
+          title: data.title,
+          candidateName: data.candidateName,
+          candidateEmail: data.candidateEmail,
+          recruiterUsername: data.recruiterUsername,
+          startTime: data.startTime.toDate(),
+          endTime: data.endTime.toDate(),
+          duration: data.duration,
+          description: data.description,
+          status: data.status
+        };
+      });
+
+      results.push({
+        type: 'interviews',
+        data: interviews
+      });
+    }
     
     // Get active users data
     if (isToday || userQuery.toLowerCase().includes('active') || userQuery.toLowerCase().includes('working')) {
@@ -158,12 +197,12 @@ export async function handleEmployeeQuery(userQuery: string, userId: string): Pr
     const employeeData = await fetchRelevantEmployeeData(userQuery);
     
     if (employeeData.length === 0 || employeeData.every(d => d.data.length === 0)) {
-      return "I couldn't find any relevant employee data for your query. Try asking about current check-ins, today's activity, or recent breaks.";
+      return "I couldn't find any relevant employee data for your query. Try asking about current check-ins, today's activity, recent breaks, or scheduled interviews.";
     }
     
     // Create a structured prompt for Gemini
     const prompt = `
-You are an HR assistant chatbot for a company's Slack workspace. You have access to employee check-in/check-out data and need to answer questions about work attendance, breaks, and productivity.
+You are an HR assistant chatbot for a company's Slack workspace. You have access to employee check-in/check-out data and interview scheduling data.
 
 Employee Data (JSON format):
 ${JSON.stringify(employeeData, null, 2)}
@@ -175,6 +214,7 @@ Data Structure Information:
 - sessions: Check-in sessions with times, work duration, break counts
 - breaks: Individual break records with types (short, lunch, personal, meeting) and durations
 - status_updates: Work status updates showing what employees are working on
+- interviews: Scheduled job interviews with candidates
 
 Common Break Types:
 - short: 15min coffee/short breaks ☕
@@ -184,7 +224,7 @@ Common Break Types:
 
 Instructions:
 1. Answer the user's question based ONLY on the provided data
-2. Be specific with numbers, times, and employee names when available
+2. Be specific with numbers, times, and employee/candidate names when available
 3. Format your response professionally but in a conversational tone suitable for Slack
 4. Use appropriate emojis to make the response more engaging
 5. If data is incomplete or missing, mention this limitation

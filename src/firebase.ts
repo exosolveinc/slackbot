@@ -1,7 +1,8 @@
-import * as admin from 'firebase-admin';
 import dotenv from 'dotenv';
-import { initializeApp } from "firebase/app";
+import * as admin from 'firebase-admin';
 import { getAI, getGenerativeModel, GoogleAIBackend } from "firebase/ai";
+import { initializeApp } from "firebase/app";
+import { google } from 'googleapis';
 
 dotenv.config();
 
@@ -35,10 +36,24 @@ const firebaseConfig = {
   measurementId: process.env.MEASUREMENT_ID
 };
 
+// Remove the separate OAuth2Client import, use google.auth.OAuth2 instead
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+// Set credentials from environment
+if (process.env.GOOGLE_REFRESH_TOKEN) {
+  oauth2Client.setCredentials({
+    refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+  });
+}
+
 const app = initializeApp(firebaseConfig);
 
 const ai = getAI(app, { backend: new GoogleAIBackend() });
 export const model = getGenerativeModel(ai, { model: "gemini-2.5-flash" });
+export const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-
-export { firebaseApp, db, admin };
+export { admin, db, firebaseApp };

@@ -1,9 +1,11 @@
 import { App } from '@slack/bolt';
 import dotenv from 'dotenv';
+import { createInterviewEvent } from './calendar';
 import { handleAskAI, handleBreakEnd, handleBreakStart, handleCheckin, handleCheckinReport, handleCheckout, handleMyHistory, handleSetTimezone, handleStatusHistory, handleStatusUpdate } from './commands';
-import { startStatusReminderService } from './database';
 import { BREAK_TYPES } from './constants';
-import './firebase'; 
+import { startStatusReminderService } from './database';
+import './firebase';
+import { handleInterviewQuery, handleScheduleInterview } from './interview-commands';
 
 dotenv.config();
 
@@ -51,9 +53,68 @@ app.command('/set-timezone', handleSetTimezone);
 
 app.command('/ask', handleAskAI);
 
+// schedule an interview
+app.command('/schedule-interview', handleScheduleInterview);
+
+app.command('/ask-interviews', handleInterviewQuery);
+
 // Error handler
 app.error(async (error) => {
   console.error('Slack bot error:', error);
+});
+
+// Handle modal submission
+app.view('schedule_interview_modal', async ({ ack, body, view, client }) => {
+  await ack();
+
+  const values = view.state.values;
+  const metadata = JSON.parse(view.private_metadata);
+
+  try {
+    // Add null checks for all values
+    const title = values.title?.value?.value;
+    const candidateName = values.candidate_name?.value?.value;
+    const candidateEmail = values.candidate_email?.value?.value;
+    const date = values.date?.value?.selected_date;
+    const time = values.time?.value?.selected_time;
+    const durationValue = values.duration?.value?.selected_option?.value;
+    const description = values.description?.value?.value || '';
+
+    // Validate required fields
+    if (!title || !candidateName || !candidateEmail || !date || !time || !durationValue) {
+      await client.chat.postMessage({
+        channel: metadata.userId,
+        text: '❌ Missing required fields. Please try again.'
+      });
+      return;
+    }
+
+    const duration = parseInt(durationValue);
+    const startTime = new Date(`${date}T${time}:00`);
+
+    const event = await createInterviewEvent(
+      metadata.userId,
+      metadata.username,
+      candidateName,
+      candidateEmail,
+      title,
+      startTime,
+      duration,
+      description
+    );
+
+    await client.chat.postMessage({
+      channel: metadata.userId,
+      text: `✅ *Interview Scheduled!*\n\n*Position:* ${title}\n*Candidate:* ${candidateName} (${candidateEmail})\n*Date & Time:* ${startTime.toLocaleString()}\n*Duration:* ${duration} minutes\n\n📅 Added to your Google Calendar\n✉️ Invitation sent to candidate`
+    });
+
+  } catch (error) {
+    console.error('Error scheduling interview:', error);
+    await client.chat.postMessage({
+      channel: metadata.userId,
+      text: '❌ Failed to schedule interview. Please try again.'
+    });
+  }
 });
 
 // Start the app
@@ -72,6 +133,9 @@ app.error(async (error) => {
     console.log('  /checkin-report [date] - View team report');
     console.log('  /my-history [days] - View personal history');
     console.log('  /set-timezone <timezone> - Set your timezone');
+    console.log('\nInterview commands:');
+    console.log('  /schedule-interview - Schedule a job interview');
+    console.log('  /ask-interviews <query> - Query interviews with AI');
     console.log('\n🔔 Status reminders will be sent every 45 minutes to checked-in users');
     console.log('\nBreak types available:');
     Object.entries(BREAK_TYPES).forEach(([key, config]) => {
